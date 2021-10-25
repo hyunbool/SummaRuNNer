@@ -2,6 +2,7 @@
 
 import json
 import models
+from models.encoder import Encoder
 import utils
 import argparse,random,logging,numpy,os
 import torch
@@ -13,7 +14,11 @@ from torch.utils.data import DataLoader
 from torch.nn.utils import clip_grad_norm
 from time import time
 from tqdm import tqdm
+from util import load_dataset, make_iter, Params
 
+import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [INFO] %(message)s')
 parser = argparse.ArgumentParser(description='extractive summary')
 # model
@@ -26,14 +31,14 @@ parser.add_argument('-seg_num',type=int,default=10)
 parser.add_argument('-kernel_num',type=int,default=100)
 parser.add_argument('-kernel_sizes',type=str,default='3,4,5')
 parser.add_argument('-model',type=str,default='RNN_RNN')
-parser.add_argument('-hidden_size',type=int,default=200)
+parser.add_argument('-hidden_size',type=int,default=16)
 # train
 parser.add_argument('-lr',type=float,default=1e-3)
 parser.add_argument('-batch_size',type=int,default=32)
 parser.add_argument('-epochs',type=int,default=5)
 parser.add_argument('-seed',type=int,default=1)
-parser.add_argument('-train_dir',type=str,default='data/train.json')
-parser.add_argument('-val_dir',type=str,default='data/val.json')
+parser.add_argument('-train_dir',type=str,default='data/train_ex.json')
+parser.add_argument('-val_dir',type=str,default='data/val_ex.json')
 parser.add_argument('-embedding',type=str,default='data/embedding.npz')
 parser.add_argument('-word2id',type=str,default='data/word2id.json')
 parser.add_argument('-report_every',type=int,default=1500)
@@ -66,19 +71,24 @@ torch.manual_seed(args.seed)
 random.seed(args.seed)
 numpy.random.seed(args.seed) 
     
-def eval(net,vocab,data_iter,criterion):
+def eval(net,model,vocab,data_iter,criterion):
     net.eval()
     total_loss = 0
     batch_num = 0
     for batch in data_iter:
-        features,targets,_,doc_lens = vocab.make_features(batch)
-        features,targets = Variable(features), Variable(targets.float())
+        input, features,targets,doc_lens = vocab.make_features(batch)
+        input, features,targets = Variable(input),Variable(features), Variable(targets.float())
         if use_gpu:
+            input = input.cuda()
             features = features.cuda()
             targets = targets.cuda()
-        probs = net(features,doc_lens)
+
+        # autoencoder
+        encoder_output = model(input)
+
+        probs = net(features,doc_lens,encoder_output)
         loss = criterion(probs,targets)
-        total_loss += loss.data[0]
+        total_loss += loss.data
         batch_num += 1
     loss = total_loss / batch_num
     net.train()
@@ -86,7 +96,8 @@ def eval(net,vocab,data_iter,criterion):
 
 def train():
     logging.info('Loading vocab,train and val dataset.Wait a second,please')
-    
+    params = Params('config/params.json')
+
     embed = torch.Tensor(np.load(args.embedding)['embedding'])
     with open(args.word2id) as f:
         word2id = json.load(f)
@@ -99,6 +110,28 @@ def train():
     with open(args.val_dir) as f:
         examples = [json.loads(line) for line in f]
     val_dataset = utils.Dataset(examples)
+
+
+    """
+    ae model 가져오기 
+    """
+    # select model and load trained model
+
+
+    # load
+    pretrained_dict = torch.load("./entire_ae.pt")
+    model = Encoder(params)
+    model_dict = model.state_dict()
+    # 1. filter out unnecessary keys
+    pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+    # 2. overwrite entries in the existing state dict
+    model_dict.update(pretrained_dict)
+    # 3. load the new state dict
+    model.load_state_dict(model_dict)
+
+    model.to(params.device)
+    model.eval()
+
 
     # update args
     args.embed_num = embed.size(0)
@@ -126,30 +159,41 @@ def train():
     optimizer = torch.optim.Adam(net.parameters(),lr=args.lr)
     net.train()
     
-    t1 = time() 
-    for epoch in range(1,args.epochs+1):
-        for i,batch in enumerate(train_iter):
-            features,targets,_,doc_lens = vocab.make_features(batch)
-            features,targets = Variable(features), Variable(targets.float())
-            if use_gpu:
-                features = features.cuda()
-                targets = targets.cuda()
-            probs = net(features,doc_lens)
-            loss = criterion(probs,targets)
-            optimizer.zero_grad()
-            loss.backward()
-            clip_grad_norm(net.parameters(), args.max_norm)
-            optimizer.step()
-            if args.debug:
-                print('Batch ID:%d Loss:%f' %(i,loss.data[0]))
-                continue
-            if i % args.report_every == 0:
-                cur_loss = eval(net,vocab,val_iter,criterion)
-                if cur_loss < min_loss:
-                    min_loss = cur_loss
-                    best_path = net.save()
-                logging.info('Epoch: %2d Min_Val_Loss: %f Cur_Val_Loss: %f'
-                        % (epoch,min_loss,cur_loss))
+    t1 = time()
+    with torch.autograd.set_detect_anomaly(True):
+
+        for epoch in range(1,args.epochs+1):
+            for i,batch in enumerate(train_iter):
+                input,features,targets,doc_lens = vocab.make_features(batch)
+                input,features,targets = Variable(input),Variable(features), Variable(targets.float())
+                if use_gpu:
+                    input = input.cuda()
+                    features = features.cuda()
+                    targets = targets.cuda()
+
+                # autoencoder
+                encoder_output = model(input)
+
+                probs = net(features,doc_lens,encoder_output)
+
+                try:
+                    loss = criterion(probs,targets)
+                    optimizer.zero_grad()
+                    loss.backward()
+                    clip_grad_norm(net.parameters(), args.max_norm)
+                    optimizer.step()
+                    if args.debug:
+                        print('Batch ID:%d Loss:%f' %(i,loss.data))
+                        continue
+                    if i % args.report_every == 0:
+                        cur_loss = eval(net,model,vocab,val_iter,criterion)
+                        if cur_loss < min_loss:
+                            min_loss = cur_loss
+                            best_path = net.save()
+                        logging.info('Epoch: %2d Min_Val_Loss: %f Cur_Val_Loss: %f'
+                                % (epoch,min_loss,cur_loss))
+                except ValueError:
+                    continue
     t2 = time()
     logging.info('Total Cost:%f h'%((t2-t1)/3600))
 
