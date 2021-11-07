@@ -46,7 +46,7 @@ parser.add_argument('-seq_trunc',type=int,default=50)
 parser.add_argument('-max_norm',type=float,default=1.0)
 # test
 parser.add_argument('-load_dir',type=str,default='checkpoints/RNN_RNN_seed_1.pt')
-parser.add_argument('-test_dir',type=str,default='data/test.json')
+parser.add_argument('-test_dir',type=str,default='data/test_ex.json')
 parser.add_argument('-ref',type=str,default='outputs/ref')
 parser.add_argument('-hyp',type=str,default='outputs/hyp')
 parser.add_argument('-filename',type=str,default='x.txt') # TextFile to be summarized
@@ -257,16 +257,26 @@ def test():
     print('Speed: %.2f docs / s' % (doc_num / time_cost))
 
 
-def predict(examples):
+def predict():
+    params = Params('config/params.json')
+
     embed = torch.Tensor(np.load(args.embedding)['embedding'])
     with open(args.word2id) as f:
         word2id = json.load(f)
     vocab = utils.Vocab(embed, word2id)
+
+    with open(args.test_dir) as f:
+        examples = [json.loads(line) for line in f]
+
     pred_dataset = utils.Dataset(examples)
+
 
     pred_iter = DataLoader(dataset=pred_dataset,
                             batch_size=args.batch_size,
                             shuffle=False)
+    """
+    extract 모델
+    """
     if use_gpu:
         checkpoint = torch.load(args.load_dir)
     else:
@@ -281,27 +291,59 @@ def predict(examples):
     if use_gpu:
         net.cuda()
     net.eval()
-    
+
+    """
+    ae
+    """
+    # load
+    pretrained_dict = torch.load("./entire_ae.pt")
+    model = Encoder(params)
+    model_dict = model.state_dict()
+    # 1. filter out unnecessary keys
+    pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
+    # 2. overwrite entries in the existing state dict
+    model_dict.update(pretrained_dict)
+    # 3. load the new state dict
+    model.load_state_dict(model_dict)
+
+    model.to(params.device)
+    model.eval()
+
+    """
+    predict
+    """
     doc_num = len(pred_dataset)
     time_cost = 0
     file_id = 1
     for batch in tqdm(pred_iter):
-        features, doc_lens = vocab.make_predict_features(batch)
+        input,features, doc_lens = vocab.make_predict_features(batch)
+        input,features= Variable(input), Variable(features)
         t1 = time()
         if use_gpu:
-            probs = net(Variable(features).cuda(), doc_lens)
+            input = input.cuda()
+            features = features.cuda()
+
+            encoder_output = model(features)
+
+            probs = net(features, doc_lens, encoder_output)
         else:
-            probs = net(Variable(features), doc_lens)
+            probs = net(Variable(features), doc_lens, encoder_output)
         t2 = time()
         time_cost += t2 - t1
         start = 0
         for doc_id,doc_len in enumerate(doc_lens):
             stop = start + doc_len
             prob = probs[start:stop]
-            topk = min(args.topk,doc_len)
+
+            topk = 1
+            #topk = min(args.topk,doc_len)
             topk_indices = prob.topk(topk)[1].cpu().data.numpy()
             topk_indices.sort()
-            doc = batch[doc_id].split('. ')[:doc_len]
+
+
+
+
+            doc = batch['doc'][doc_id].split('</s> ')[:doc_len]
             hyp = [doc[index] for index in topk_indices]
             with open(os.path.join(args.hyp,str(file_id)+'.txt'), 'w') as f:
                 f.write('. '.join(hyp))
@@ -312,9 +354,8 @@ def predict(examples):
 if __name__=='__main__':
     if args.test:
         test()
+    # python main.py -batch_size 1 -predict -load_dir checkpoints/RNN_RNN_seed_1.pt
     elif args.predict:
-        with open(args.filename) as file:
-            bod = [file.read()]
-        predict(bod)
+        predict()
     else:
         train()

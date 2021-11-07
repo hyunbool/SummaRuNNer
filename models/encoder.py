@@ -1,8 +1,8 @@
 import torch.nn as nn
 
-from model.attention import MultiHeadAttention
-from model.positionwise import PositionWiseFeedForward
-from model.ops import create_positional_encoding, create_source_mask, create_position_vector
+from models.attention import MultiHeadAttention
+from models.positionwise import PositionWiseFeedForward
+from models.ops import create_positional_encoding, create_source_mask, create_position_vector
 
 
 class EncoderLayer(nn.Module):

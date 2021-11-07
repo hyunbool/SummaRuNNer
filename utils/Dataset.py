@@ -28,17 +28,7 @@ class Dataset(data.Dataset):
     def __getitem__(self, idx):
         ex = self.examples[idx]
         return ex
-        #words = ex['sents'].split()
-        #guess = np.random.random()
 
-        #if self.training:
-        #    if guess > 0.5:
-        #        sents = self.dropout(words,p=0.3)
-        #    else:
-        #        sents = self.shuffle(words)
-        #else:
-        #    sents = ex['sents']
-        #return {'id':ex['id'],'sents':sents,'labels':ex['labels']}
         
     def __len__(self):
         return len(self.examples)

@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model.ops import init_weight
+from models.ops import init_weight
 
 
 class PositionWiseFeedForward(nn.Module):

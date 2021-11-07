@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-from model.ops import init_weight
+from models.ops import init_weight
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 

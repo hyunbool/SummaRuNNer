@@ -8,8 +8,12 @@ class Vocab():
         assert len(self.word2id) == len(self.id2word)
         self.PAD_IDX = 0
         self.UNK_IDX = 1
-        self.PAD_TOKEN = 'PAD_TOKEN'
-        self.UNK_TOKEN = 'UNK_TOKEN'
+        self.SOS_IDX = 2
+        self.EOS_IDX = 3
+        self.SOS_TOKEN = '<sos>'
+        self.EOS_TOKEN = '<eos>'
+        self.PAD_TOKEN = '<pad>'
+        self.UNK_TOKEN = '<unk>'
     
     def __len__(self):
         return len(word2id)
@@ -22,12 +26,12 @@ class Vocab():
         else:
             return self.UNK_IDX
     
-    def make_features(self,batch,sent_trunc=50,doc_trunc=100,split_token='\n'):
-        sents_list,targets,doc_lens = [],[],[]
+    def make_features(self,batch,sent_trunc=50,doc_trunc=100,split_token='</s> '):
+        input_list, sents_list,targets,doc_lens = [],[],[],[]
         # trunc document
-        for doc,label in zip(batch['doc'],batch['labels']):
+        for input, doc,label in zip(batch['input'], batch['doc'],batch['labels']):
             sents = doc.split(split_token)
-            labels = label.split(split_token)
+            labels = label.split("\n")
             labels = [int(l) for l in labels]
             max_sent_num = min(doc_trunc,len(sents))
             sents = sents[:max_sent_num]
@@ -35,6 +39,11 @@ class Vocab():
             sents_list += sents
             targets += labels
             doc_lens.append(len(sents))
+            input_list.append(input)
+
+        """
+        doc
+        """
         # trunc or pad sent
         max_sent_len = 0
         batch_sents = []
@@ -49,21 +58,46 @@ class Vocab():
         for sent in batch_sents:
             feature = [self.w2i(w) for w in sent] + [self.PAD_IDX for _ in range(max_sent_len-len(sent))]
             features.append(feature)
-        
+
+        """
+        input
+        """
+        # trunc or pad sent
+        max_sent_len = 0
+        batch_input = []
+        for sent in input_list:
+            words = sent.split()
+            if len(words) > sent_trunc:
+                words = words[:sent_trunc]
+            max_sent_len = len(words) if len(words) > max_sent_len else max_sent_len
+            batch_input.append(words)
+
+        input_features = []
+        for sent in batch_input:
+            input_feature = [self.w2i(w) for w in sent] + [self.PAD_IDX for _ in range(max_sent_len - len(sent))]
+            input_features.append(input_feature)
+
+
+        input_features = torch.LongTensor(input_features)
         features = torch.LongTensor(features)    
         targets = torch.LongTensor(targets)
-        summaries = batch['summaries']
 
-        return features,targets,summaries,doc_lens
 
-    def make_predict_features(self, batch, sent_trunc=150, doc_trunc=100, split_token='. '):
-        sents_list, doc_lens = [],[]
-        for doc in batch:
+        return input_features,features,targets,doc_lens
+
+    def make_predict_features(self, batch, sent_trunc=150, doc_trunc=100, split_token='</s> '):
+        input_list, sents_list, doc_lens = [],[],[]
+        for input, doc in zip(batch['input'], batch['doc']):
             sents = doc.split(split_token)
             max_sent_num = min(doc_trunc,len(sents))
             sents = sents[:max_sent_num]
             sents_list += sents
             doc_lens.append(len(sents))
+            input_list.append(input)
+
+        """
+        doc
+        """
         # trunc or pad sent
         max_sent_len = 0
         batch_sents = []
@@ -79,6 +113,26 @@ class Vocab():
             feature = [self.w2i(w) for w in sent] + [self.PAD_IDX for _ in range(max_sent_len-len(sent))]
             features.append(feature)
 
+
+        """
+        input
+        """
+        # trunc or pad sent
+        max_sent_len = 0
+        batch_input = []
+        for sent in input_list:
+            words = sent.split()
+            if len(words) > sent_trunc:
+                words = words[:sent_trunc]
+            max_sent_len = len(words) if len(words) > max_sent_len else max_sent_len
+            batch_input.append(words)
+
+        input_features = []
+        for sent in batch_input:
+            input_feature = [self.w2i(w) for w in sent] + [self.PAD_IDX for _ in range(max_sent_len - len(sent))]
+            input_features.append(input_feature)
+
+        input_features = torch.LongTensor(input_features)
         features = torch.LongTensor(features)
 
-        return features, doc_lens
+        return input_features, features, doc_lens
